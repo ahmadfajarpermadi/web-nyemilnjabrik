@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
 import {
   getCurrentSession,
   getCurrentUserProfile,
   onAuthStateChange,
-  logout
+  signOut
 } from '../lib/auth.js';
 
 import { debugError } from '../lib/supabase.js';
@@ -24,7 +23,7 @@ export function useAuth() {
 
     const safeLogout = async () => {
       try {
-        await logout();
+        await signOut();
       } catch (error) {
         console.error(error);
       } finally {
