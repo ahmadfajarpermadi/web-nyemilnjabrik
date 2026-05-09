@@ -52,7 +52,25 @@ export function useAuth() {
 
         try {
           // ambil profile user
-          const profile = await getCurrentUserProfile();
+try {
+  const profile = await getCurrentUserProfile();
+
+  if (!profile) {
+    throw new Error('Profile not found');
+  }
+
+  setUser(profile);
+
+} catch (profileError) {
+  console.error(profileError);
+
+  // AUTO CLEANUP SESSION CORRUPT
+  await signOut();
+
+  localStorage.removeItem('nyemil-njabrik-auth');
+
+  setUser(null);
+}
 
           if (!mounted) return;
 

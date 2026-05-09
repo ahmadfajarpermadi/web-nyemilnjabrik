@@ -4,88 +4,142 @@ import { reportError } from './errors.js';
 export async function getCurrentSession() {
   try {
     const { data, error } = await supabase.auth.getSession();
+
     if (error) throw error;
+
     return data.session;
+
   } catch (error) {
-    throw new Error(reportError('auth.session', error));
+    console.error(error);
+
+    return null;
   }
 }
 
 export async function getCurrentUserProfile() {
   try {
-    const {
-      data: { user },
-      error: userError
-    } = await supabase.auth.getUser();
 
-    if (userError) throw userError;
-    if (!user) return null;
+    // gunakan session agar lebih stabil
+    const session = await getCurrentSession();
+
+    if (!session?.user) {
+      return null;
+    }
+
+    const user = session.user;
+
+    // delay kecil untuk hydration auth
+    await new Promise((resolve) =>
+      setTimeout(resolve, 150)
+    );
 
     const { data: profile, error } = await supabase
       .from('profiles')
-      .select('id, full_name, role, avatar_url, created_at')
+      .select('id, full_name, role, avatar_url')
       .eq('id', user.id)
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      console.error(error);
+
+      return null;
+    }
 
     return {
       id: user.id,
       email: user.email,
-      name: profile?.full_name || user.user_metadata?.full_name || user.email,
+
+      name:
+        profile?.full_name ||
+        user.user_metadata?.full_name ||
+        user.email,
+
       role: profile?.role || 'customer',
-      avatar_url: profile?.avatar_url || null
+
+      avatar_url:
+        profile?.avatar_url || null
     };
+
   } catch (error) {
-    throw new Error(reportError('auth.profile', error));
+    console.error(error);
+
+    return null;
   }
 }
 
 export async function signInWithEmail(email, password) {
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password
-    });
+
+    const { error } =
+      await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password
+      });
 
     if (error) throw error;
 
-    // tunggu session siap
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // tunggu session restore
+    await new Promise((resolve) =>
+      setTimeout(resolve, 300)
+    );
 
-    const profile = await getCurrentUserProfile();
-
-    console.log("LOGIN PROFILE:", profile);
-
-    return profile;
+    return await getCurrentUserProfile();
 
   } catch (error) {
     console.error(error);
 
-    throw new Error(reportError('auth.login', error));
+    throw new Error(
+      reportError('auth.login', error)
+    );
   }
 }
 
-export async function signUpWithEmail({ email, password, fullName }) {
+export async function signUpWithEmail({
+  email,
+  password,
+  fullName
+}) {
   try {
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanName = fullName.trim();
 
-    if (!cleanName) throw new Error('Nama lengkap wajib diisi.');
-    if (password.length < 8) throw new Error('Password minimal 8 karakter.');
+    const cleanEmail =
+      email.trim().toLowerCase();
 
-    const { data, error } = await supabase.auth.signUp({
-      email: cleanEmail,
-      password,
-      options: {
-        data: {
-          full_name: cleanName
-        },
-        emailRedirectTo: `${window.location.origin}/login`
-      }
-    });
+    const cleanName =
+      fullName.trim();
+
+    if (!cleanName) {
+      throw new Error(
+        'Nama lengkap wajib diisi.'
+      );
+    }
+
+    if (password.length < 8) {
+      throw new Error(
+        'Password minimal 8 karakter.'
+      );
+    }
+
+    const { data, error } =
+      await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+
+        options: {
+          data: {
+            full_name: cleanName
+          },
+
+          emailRedirectTo:
+            `${window.location.origin}/login`
+        }
+      });
 
     if (error) throw error;
+
+    // tunggu session siap
+    await new Promise((resolve) =>
+      setTimeout(resolve, 300)
+    );
 
     if (!data.session?.user) {
       return {
@@ -98,64 +152,84 @@ export async function signUpWithEmail({ email, password, fullName }) {
       };
     }
 
-    return getCurrentUserProfile();
+    return await getCurrentUserProfile();
+
   } catch (error) {
-    throw new Error(reportError('auth.signup', error));
+    console.error(error);
+
+    throw new Error(
+      reportError('auth.signup', error)
+    );
   }
 }
 
 export async function resetPassword(email) {
   try {
-    const redirectTo = `${window.location.origin}/login`;
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
-    if (error) throw error;
-  } catch (error) {
-    throw new Error(reportError('auth.reset', error));
-  }
-}
 
-export async function signOut() {
-  try {
-    const { error } = await supabase.auth.signOut();
+    const redirectTo =
+      `${window.location.origin}/login`;
+
+    const { error } =
+      await supabase.auth.resetPasswordForEmail(
+        email.trim().toLowerCase(),
+        { redirectTo }
+      );
 
     if (error) throw error;
 
   } catch (error) {
     console.error(error);
 
-    throw new Error(reportError('auth.logout', error));
+    throw new Error(
+      reportError('auth.reset', error)
+    );
+  }
+}
+
+export async function signOut() {
+  try {
+
+    await supabase.auth.signOut();
+
+  } catch (error) {
+    console.error(error);
 
   } finally {
-    // bersihkan session local
-    localStorage.removeItem('nyemil-njabrik-auth');
+
+    localStorage.removeItem(
+      'nyemil-njabrik-auth'
+    );
   }
 }
 
 export function onAuthStateChange(callback) {
+
   const {
     data: { subscription }
   } = supabase.auth.onAuthStateChange(
-    async (_event, session) => {
+    async (event, session) => {
+
+      console.log(
+        'AUTH EVENT:',
+        event
+      );
+
+      // logout
       if (!session?.user) {
         callback(null);
         return;
       }
 
-      try {
-        await new Promise((resolve) =>
-          setTimeout(resolve, 200)
-        );
+      // hanya handle login/session
+      if (
+        event === 'SIGNED_IN' ||
+        event === 'INITIAL_SESSION'
+      ) {
 
-        const profile = await getCurrentUserProfile();
+        const profile =
+          await getCurrentUserProfile();
 
         callback(profile);
-
-      } catch (error) {
-        console.error(error);
-
-        reportError('auth.listener', error);
-
-        callback(null);
       }
     }
   );
