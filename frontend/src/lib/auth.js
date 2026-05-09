@@ -117,9 +117,17 @@ export async function resetPassword(email) {
 export async function signOut() {
   try {
     const { error } = await supabase.auth.signOut();
+
     if (error) throw error;
+
   } catch (error) {
+    console.error(error);
+
     throw new Error(reportError('auth.logout', error));
+
+  } finally {
+    // bersihkan session local
+    localStorage.removeItem('nyemil-njabrik-auth');
   }
 }
 

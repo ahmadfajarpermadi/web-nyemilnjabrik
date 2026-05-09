@@ -1,17 +1,40 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getCurrentSession,
   getCurrentUserProfile,
-  onAuthStateChange
+  onAuthStateChange,
+  logout
 } from '../lib/auth.js';
+
 import { debugError } from '../lib/supabase.js';
 
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // mencegah multiple initialization
+  const initialized = useRef(false);
+
   useEffect(() => {
+    if (initialized.current) return;
+
+    initialized.current = true;
+
     let mounted = true;
+
+    const safeLogout = async () => {
+      try {
+        await logout();
+      } catch (error) {
+        console.error(error);
+      } finally {
+        localStorage.removeItem('nyemil-njabrik-auth');
+
+        if (mounted) {
+          setUser(null);
+        }
+      }
+    };
 
     const initializeAuth = async () => {
       try {
@@ -21,22 +44,41 @@ export function useAuth() {
 
         if (!mounted) return;
 
-        if (session?.user) {
+        // tidak ada session
+        if (!session?.user) {
+          setUser(null);
+          return;
+        }
+
+        try {
+          // ambil profile user
           const profile = await getCurrentUserProfile();
 
           if (!mounted) return;
 
+          // profile tidak ditemukan
+          if (!profile) {
+            await safeLogout();
+            return;
+          }
+
           setUser(profile);
-        } else {
-          setUser(null);
+
+        } catch (profileError) {
+          console.error(profileError);
+
+          debugError('auth.profile', profileError);
+
+          // session corrupt → auto cleanup
+          await safeLogout();
         }
 
       } catch (error) {
+        console.error(error);
+
         debugError('auth.bootstrap', error);
 
-        if (mounted) {
-          setUser(null);
-        }
+        await safeLogout();
 
       } finally {
         if (mounted) {
@@ -47,18 +89,37 @@ export function useAuth() {
 
     initializeAuth();
 
-    const subscription = onAuthStateChange((profile) => {
+    const subscription = onAuthStateChange(async (profile) => {
       if (!mounted) return;
 
-      setUser(profile);
-      setLoading(false);
+      try {
+        if (!profile) {
+          setUser(null);
+          return;
+        }
+
+        setUser(profile);
+
+      } catch (error) {
+        console.error(error);
+
+        debugError('auth.listener', error);
+
+        await safeLogout();
+
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     });
 
+    // failsafe anti infinite loading
     const timeout = setTimeout(() => {
       if (mounted) {
         setLoading(false);
       }
-    }, 5000);
+    }, 6000);
 
     return () => {
       mounted = false;
