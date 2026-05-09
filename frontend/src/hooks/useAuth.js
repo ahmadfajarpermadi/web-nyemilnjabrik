@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getCurrentUserProfile, onAuthStateChange } from '../lib/auth.js';
+import {
+  getCurrentSession,
+  getCurrentUserProfile,
+  onAuthStateChange
+} from '../lib/auth.js';
 import { debugError } from '../lib/supabase.js';
 
 export function useAuth() {
@@ -8,33 +12,66 @@ export function useAuth() {
 
   useEffect(() => {
     let mounted = true;
-    const finish = () => {
-      if (mounted) setLoading(false);
+
+    const initializeAuth = async () => {
+      try {
+        setLoading(true);
+
+        const session = await getCurrentSession();
+
+        if (!mounted) return;
+
+        if (session?.user) {
+          const profile = await getCurrentUserProfile();
+
+          if (!mounted) return;
+
+          setUser(profile);
+        } else {
+          setUser(null);
+        }
+
+      } catch (error) {
+        debugError('auth.bootstrap', error);
+
+        if (mounted) {
+          setUser(null);
+        }
+
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     };
 
-    getCurrentUserProfile()
-      .then((profile) => {
-        if (mounted) setUser(profile);
-      })
-      .catch((error) => {
-        debugError('auth.bootstrap', error);
-        if (mounted) setUser(null);
-      })
-      .finally(finish);
+    initializeAuth();
 
-    const { data } = onAuthStateChange((profile) => {
-      if (mounted) setUser(profile);
-      finish();
+    const subscription = onAuthStateChange((profile) => {
+      if (!mounted) return;
+
+      setUser(profile);
+      setLoading(false);
     });
 
-    const fallbackTimer = window.setTimeout(finish, 5000);
+    const timeout = setTimeout(() => {
+      if (mounted) {
+        setLoading(false);
+      }
+    }, 5000);
 
     return () => {
       mounted = false;
-      window.clearTimeout(fallbackTimer);
-      data?.subscription?.unsubscribe();
+
+      clearTimeout(timeout);
+
+      subscription?.unsubscribe?.();
     };
   }, []);
 
-  return { user, setUser, loading };
+  return {
+    user,
+    setUser,
+    loading
+  };
 }
