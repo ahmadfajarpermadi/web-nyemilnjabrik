@@ -1,102 +1,97 @@
 # Nyemil Njabrik
 
-Website UMKM modern untuk penjualan snack/cemilan dengan dua role utama: customer dan admin. Proyek ini memakai React + Vite untuk frontend, Express API untuk backend, JWT authentication, MySQL schema lengkap, dashboard analytics, CRUD produk, order monitoring, dan dummy data.
+Modern UMKM snack ecommerce and dashboard system built with React, Vite, Tailwind CSS, Supabase Auth, Supabase PostgreSQL, Supabase Storage, and Vercel.
 
 ## Struktur
 
 ```text
 nyemil-njabrik/
-  frontend/        React + Vite + Tailwind + Framer Motion + Recharts
-  backend/         Express REST API + JWT + MySQL
-  database/        Schema, migration-style SQL, dan seed dummy data
+  frontend/        React + Vite + Tailwind + Supabase SDK
+  database/        Supabase PostgreSQL schema, RLS policies, and seed data
+  .github/         CI build workflow
 ```
 
-## Setup Cepat
+The previous Express/MySQL backend has been removed. The frontend now talks directly to Supabase with RLS-protected queries.
 
-1. Install Node.js 20+ dan MySQL 8+.
+## Local Setup
+
+1. Install Node.js 20+.
 2. Install dependencies:
 
 ```bash
 npm run install:all
 ```
 
-3. Buat database:
+3. Create a Supabase project.
+4. Run SQL in order:
 
-```sql
-CREATE DATABASE nyemil_njabrik;
+```text
+database/schema.sql
+database/seed.sql
 ```
 
-4. Jalankan schema dan seed:
-
-```bash
-mysql -u root -p nyemil_njabrik < database/schema.sql
-mysql -u root -p nyemil_njabrik < database/seed.sql
-```
-
-5. Salin env backend:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-6. Jalankan full-stack:
-
-```bash
-npm run dev
-```
-
-Frontend: `http://localhost:5173`  
-Backend API: `http://localhost:4000/api`
-
-## Environment
-
-Backend memakai `backend/.env`:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-Frontend memakai `frontend/.env`:
+5. Create `frontend/.env`:
 
 ```bash
 cp frontend/.env.example frontend/.env
 ```
 
-Nilai produksi yang wajib disiapkan:
+6. Fill env values:
 
-- `frontend`: `VITE_API_URL=https://nyemil-njabrik-api.onrender.com/api`
-- `frontend`: `VITE_SITE_URL=https://nyemil-njabrik.vercel.app`
-- `backend`: `NODE_ENV=production`
-- `backend`: `CLIENT_URLS=https://nyemil-njabrik.vercel.app`
-- `backend`: `JWT_SECRET=<secret panjang dan acak>`
-- `backend`: `DATABASE_URL=mysql://user:password@host:3306/database`
-- `backend`: `DB_SSL=true` jika provider MySQL mensyaratkan TLS
+```text
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_SITE_URL=http://localhost:5173
+```
 
-## Build Produksi
+7. Start the app:
+
+```bash
+npm run dev
+```
+
+Frontend: `http://localhost:5173`
+
+## Supabase Auth
+
+Register users from the app or create them in Supabase Auth. New users automatically get a row in `profiles` with role `customer`.
+
+To promote an admin:
+
+```sql
+update public.profiles
+set role = 'admin', full_name = 'Admin Nyemil'
+where id = '<auth-user-id>';
+```
+
+Admin users are redirected to `/admin`; customer users are redirected to `/customer`.
+
+## Supabase Storage
+
+`database/schema.sql` creates a public `product-images` bucket and RLS policies. Admin product uploads use `frontend/src/lib/storage.js` and store public image URLs in `products.image_url`.
+
+## Production Build
 
 ```bash
 npm run build
-npm start --prefix backend
+npm run preview
 ```
 
-Health check backend:
+## Deploy to Vercel
 
-```bash
-curl http://localhost:4000/api/health
-```
+Set Vercel Root Directory to `frontend`.
 
-## Deploy Frontend ke Vercel
-
-Konfigurasi Vercel ada di `frontend/vercel.json`. Di dashboard Vercel, set **Root Directory** ke `frontend`.
-
-Environment Variables:
+Environment variables:
 
 ```text
-VITE_API_URL=https://nyemil-njabrik-api.onrender.com/api
-VITE_SITE_URL=https://nyemil-njabrik.vercel.app
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_SITE_URL=https://your-domain.vercel.app
 ```
 
-Command manual:
+Vercel config is in `frontend/vercel.json`, including SPA rewrites and production cache/security headers.
+
+Manual deploy:
 
 ```bash
 cd frontend
@@ -105,55 +100,22 @@ npm run build
 vercel deploy --prod
 ```
 
-Jika memakai Git integration, push branch `main` setelah env diisi. Vercel akan menjalankan `npm ci` dan `npm run build`, lalu melayani `dist`.
+## Features
 
-## Deploy Backend ke Render
-
-Blueprint Render ada di `render.yaml`. Backend berjalan dari folder `backend` dengan health check `/api/health`.
-
-Environment Variables di Render:
-
-```text
-NODE_ENV=production
-CLIENT_URLS=https://nyemil-njabrik.vercel.app
-JWT_SECRET=<generate otomatis atau isi secret panjang>
-DATABASE_URL=mysql://user:password@host:3306/database
-DB_SSL=true
-DB_SSL_REJECT_UNAUTHORIZED=true
-```
-
-Render tidak menyediakan MySQL native di semua plan. Pakai MySQL eksternal seperti Aiven, PlanetScale-compatible provider, Railway, atau server MySQL sendiri, lalu masukkan connection string ke `DATABASE_URL`.
-
-Command manual Render:
-
-```bash
-cd backend
-npm ci
-npm start
-```
+- Premium responsive ecommerce UI with dark mode and smooth animations.
+- Supabase Auth login, register, logout, forgot password, persisted session.
+- Role-based protected routes for `admin` and `customer`.
+- Product browse, cart, checkout, order tracking, wishlist toggle.
+- Admin dashboard with Supabase realtime refresh for orders, products, notifications, and stock.
+- Product add/edit/delete with Supabase Storage image uploads.
+- PostgreSQL schema with RLS policies for authenticated customer access and admin-only writes.
+- SEO metadata, sitemap, robots.txt, and Vercel-ready deployment.
 
 ## Deployment Checklist
 
-- Jalankan schema dan seed ke database produksi sebelum membuka website.
-- Deploy backend lebih dulu, pastikan `/api/health` mengembalikan status `ok`.
-- Isi `VITE_API_URL` frontend dengan URL backend HTTPS Render yang berakhiran `/api`.
-- Isi `CLIENT_URLS` backend dengan domain Vercel produksi. Tambahkan preview domain dipisah koma bila perlu.
-- Setelah deploy frontend, uji route langsung seperti `/shop`, `/product/basreng-njabrik-level-3`, `/login`, dan `/admin`.
-- Pastikan sitemap dan canonical URL disesuaikan dari placeholder `nyemil-njabrik.vercel.app` ke domain final.
-- Jangan commit file `.env`; commit hanya `.env.example`.
-
-## Demo Login
-
-- Admin: `admin@nyemilnjabrik.test` / `password123`
-- Customer: `sari@example.com` / `password123`
-
-## Fitur Utama
-
-- Landing page premium UMKM, shop, product detail, cart, checkout, tracking, customer dashboard.
-- Admin dashboard SaaS-style dengan analytics cards, chart revenue, recent order, order table, product CRUD UI, stock alert, customer management, notification center, laporan.
-- Dark/light mode, responsive mobile-first, protected route, reusable components, skeleton loading, toast alert, search suggestion, wishlist, recently viewed.
-- Backend REST API dengan JWT multi-role, Helmet, CORS, validation, MySQL prepared query, Socket.IO notification.
-
-## Catatan
-
-UI frontend memakai dummy data lokal agar tampilan langsung bisa dieksplor. Endpoint API backend sudah disiapkan dengan kontrak yang sama sehingga integrasi data real tinggal mengganti service di `frontend/src/lib/api.js`.
+- Run `database/schema.sql` then `database/seed.sql`.
+- Enable email auth in Supabase Auth settings.
+- Add production domain to Supabase Auth redirect URLs.
+- Promote at least one profile to `admin`.
+- Set Vercel env variables before deploying.
+- Update `frontend/public/sitemap.xml`, `frontend/public/robots.txt`, and canonical metadata to the final production domain.

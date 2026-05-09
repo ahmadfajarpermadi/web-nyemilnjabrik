@@ -43,8 +43,25 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { categories, notifications, orders, products, revenueData } from './data/mockData.js';
+import { categories, notifications as mockNotifications, orders as mockOrders, products as mockProducts, revenueData } from './data/mockData.js';
+import { resetPassword, signInWithEmail, signOut, signUpWithEmail } from './lib/auth.js';
 import { formatCurrency } from './lib/api.js';
+import { getFriendlyError } from './lib/errors.js';
+import { debugError, isSupabaseConfigured } from './lib/supabase.js';
+import {
+  createOrder,
+  createProduct,
+  deleteProduct,
+  getDashboardData,
+  getNotifications,
+  getOrders,
+  getProducts,
+  subscribeDashboard,
+  toggleWishlist,
+  updateProfile,
+  updateProduct
+} from './lib/database.js';
+import { useAuth } from './hooks/useAuth.js';
 
 const pageMotion = {
   initial: { opacity: 0, y: 12 },
@@ -56,7 +73,10 @@ const pageMotion = {
 function App() {
   const [theme, setTheme] = useState(localStorage.getItem('nn_theme') || 'light');
   const [cart, setCart] = useState(() => JSON.parse(localStorage.getItem('nn_cart') || '[]'));
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('nn_user') || 'null'));
+  const [products, setProducts] = useState(isSupabaseConfigured ? [] : mockProducts);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productsError, setProductsError] = useState('');
+  const { user, setUser, loading: authLoading } = useAuth();
   const location = useLocation();
   useSeo(location.pathname);
 
@@ -68,6 +88,39 @@ function App() {
   useEffect(() => {
     localStorage.setItem('nn_cart', JSON.stringify(cart));
   }, [cart]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (!isSupabaseConfigured) {
+      setProducts(mockProducts);
+      setProductsError('Supabase belum dikonfigurasi. Menampilkan data demo lokal.');
+      setProductsLoading(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    getProducts()
+      .then((items) => {
+        if (!mounted) return;
+        setProducts(items);
+        setProductsError('');
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        debugError('products.bootstrap', error);
+        setProducts([]);
+        setProductsError(getFriendlyError(error, 'Produk gagal dimuat dari Supabase.'));
+      })
+      .finally(() => {
+        if (mounted) setProductsLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const addToCart = (product) => {
     setCart((items) => {
@@ -88,17 +141,17 @@ function App() {
     <AppShell cartCount={cart.reduce((sum, item) => sum + item.qty, 0)} theme={theme} setTheme={setTheme} user={user} setUser={setUser}>
       <AnimatePresence mode="wait">
         <Routes location={location} key={location.pathname}>
-          <Route path="/" element={<LandingPage addToCart={addToCart} />} />
-          <Route path="/shop" element={<ShopPage addToCart={addToCart} />} />
-          <Route path="/product/:slug" element={<ProductDetail addToCart={addToCart} />} />
+          <Route path="/" element={<LandingPage products={products} addToCart={addToCart} />} />
+          <Route path="/shop" element={<ShopPage products={products} loading={productsLoading} error={productsError} addToCart={addToCart} />} />
+          <Route path="/product/:slug" element={<ProductDetail products={products} loading={productsLoading} error={productsError} user={user} addToCart={addToCart} />} />
           <Route path="/cart" element={<CartPage cart={cart} updateQty={updateQty} removeCart={removeCart} />} />
-          <Route path="/checkout" element={<CheckoutPage cart={cart} setCart={setCart} />} />
-          <Route path="/tracking/:id" element={<TrackingPage />} />
-          <Route path="/customer" element={<CustomerDashboard user={user} />} />
+          <Route path="/checkout" element={<CustomerGuard user={user} authLoading={authLoading}><CheckoutPage user={user} cart={cart} setCart={setCart} /></CustomerGuard>} />
+          <Route path="/tracking/:id" element={<CustomerGuard user={user} authLoading={authLoading}><TrackingPage user={user} /></CustomerGuard>} />
+          <Route path="/customer" element={<CustomerGuard user={user} authLoading={authLoading}><CustomerDashboard user={user} products={products} /></CustomerGuard>} />
           <Route path="/login" element={<AuthPage type="login" setUser={setUser} />} />
           <Route path="/register" element={<AuthPage type="register" setUser={setUser} />} />
           <Route path="/forgot-password" element={<AuthPage type="forgot" setUser={setUser} />} />
-          <Route path="/admin/*" element={<AdminGuard user={user}><AdminDashboard /></AdminGuard>} />
+          <Route path="/admin/*" element={<AdminGuard user={user} authLoading={authLoading}><AdminDashboard products={products} setProducts={setProducts} /></AdminGuard>} />
         </Routes>
       </AnimatePresence>
       <FloatingActions />
@@ -175,11 +228,14 @@ function AppShell({ children, cartCount, theme, setTheme, user, setUser }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
-  const logout = () => {
-    localStorage.removeItem('nn_user');
-    localStorage.removeItem('nn_token');
-    setUser(null);
-    navigate('/');
+  const logout = async () => {
+    try {
+      await signOut();
+      setUser(null);
+      navigate('/');
+    } catch (error) {
+      Swal.fire('Logout gagal', error.message, 'error');
+    }
   };
 
   return (
@@ -258,7 +314,7 @@ function MobileNav({ to, icon, label }) {
   return <Link to={to} className="flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3 font-semibold dark:bg-slate-800">{icon}{label}</Link>;
 }
 
-function LandingPage({ addToCart }) {
+function LandingPage({ products, addToCart }) {
   return (
     <motion.div {...pageMotion}>
       <section className="relative overflow-hidden bg-brand-cream dark:bg-slate-950">
@@ -328,15 +384,9 @@ function LandingPage({ addToCart }) {
   );
 }
 
-function ShopPage({ addToCart }) {
+function ShopPage({ products, loading, error, addToCart }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('Semua');
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 650);
-    return () => clearTimeout(timer);
-  }, []);
 
   const filtered = products.filter((item) => {
     const matchQuery = item.name.toLowerCase().includes(query.toLowerCase());
@@ -365,6 +415,7 @@ function ShopPage({ addToCart }) {
         </div>
 
         <div className="mt-8">
+          {error && <InlineAlert title="Produk belum tersedia" text={error} />}
           {loading ? <SkeletonGrid /> : filtered.length ? <ProductGrid items={filtered} addToCart={addToCart} /> : <EmptyState title="Produk tidak ditemukan" text="Coba kata kunci atau kategori lain." />}
         </div>
       </div>
@@ -372,9 +423,11 @@ function ShopPage({ addToCart }) {
   );
 }
 
-function ProductDetail({ addToCart }) {
+function ProductDetail({ products, loading, error, user, addToCart }) {
   const { slug } = useParams();
-  const product = products.find((item) => item.slug === slug) || products[0];
+  const product = products.find((item) => item.slug === slug) || products[0] || (!isSupabaseConfigured ? mockProducts[0] : null);
+  if (loading) return <div className="page px-4 py-10"><SkeletonGrid /></div>;
+  if (!product) return <div className="page px-4 py-10"><EmptyState title="Produk tidak tersedia" text={error || 'Produk belum tersedia di Supabase.'} /></div>;
   const related = products.filter((item) => item.category === product.category && item.id !== product.id);
 
   useEffect(() => {
@@ -400,7 +453,23 @@ function ProductDetail({ addToCart }) {
           <p className="mt-5 leading-8 text-slate-600 dark:text-slate-300">{product.description}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <button className="btn-primary" onClick={() => addToCart(product)}><FiShoppingCart /> Tambah Keranjang</button>
-            <button className="btn-secondary"><FiHeart /> Wishlist</button>
+            <button
+              className="btn-secondary"
+              onClick={async () => {
+                if (!user) {
+                  Swal.fire('Login diperlukan', 'Masuk dulu untuk menyimpan wishlist.', 'info');
+                  return;
+                }
+                try {
+                  const saved = await toggleWishlist(user.id, product.id);
+                  Swal.fire(saved ? 'Disimpan' : 'Dihapus', saved ? 'Produk masuk wishlist.' : 'Produk dihapus dari wishlist.', 'success');
+                } catch (error) {
+                  Swal.fire('Wishlist gagal', error.message, 'error');
+                }
+              }}
+            >
+              <FiHeart /> Wishlist
+            </button>
           </div>
           <div className="mt-8 rounded-3xl bg-slate-50 p-5 dark:bg-slate-900">
             <h3 className="font-bold">Review pelanggan</h3>
@@ -446,15 +515,26 @@ function CartPage({ cart, updateQty, removeCart }) {
   );
 }
 
-function CheckoutPage({ cart, setCart }) {
+function CheckoutPage({ user, cart, setCart }) {
   const navigate = useNavigate();
+  const [submitting, setSubmitting] = useState(false);
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0) + (cart.length ? 10000 : 0);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    setCart([]);
-    Swal.fire({ title: 'Pesanan dibuat', text: 'Pembayaran menunggu verifikasi admin.', icon: 'success' });
-    navigate('/tracking/NN-20260508-NEW');
+    if (!cart.length) return;
+
+    setSubmitting(true);
+    try {
+      const order = await createOrder(user.id, cart);
+      setCart([]);
+      Swal.fire({ title: 'Pesanan dibuat', text: 'Pembayaran menunggu verifikasi admin.', icon: 'success' });
+      navigate(`/tracking/${order.id}`);
+    } catch (error) {
+      Swal.fire('Checkout gagal', error.message, 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -480,7 +560,9 @@ function CheckoutPage({ cart, setCart }) {
               <input type="file" accept="image/*" />
             </label>
           </div>
-          <button className="mt-6 btn-primary" disabled={!cart.length}>Buat Pesanan</button>
+          <button className="mt-6 btn-primary" disabled={!cart.length || submitting}>
+            {submitting ? 'Memproses...' : 'Buat Pesanan'}
+          </button>
         </form>
         <aside className="summary-card">
           <h2 className="font-bold">Ringkasan pesanan</h2>
@@ -494,14 +576,25 @@ function CheckoutPage({ cart, setCart }) {
   );
 }
 
-function TrackingPage() {
+function TrackingPage({ user }) {
+  const { id } = useParams();
+  const [order, setOrder] = useState(null);
   const steps = ['pending', 'diproses', 'dikirim', 'selesai'];
-  const active = 2;
+  const active = Math.max(0, steps.indexOf(order?.status || 'pending'));
+
+  useEffect(() => {
+    getOrders(user.id, user.role)
+      .then((items) => setOrder(items.find((item) => item.id === id) || null))
+      .catch((error) => console.warn(error.message));
+  }, [id, user]);
+
   return (
     <motion.div className="page" {...pageMotion}>
       <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
         <span className="pill">Order Tracking</span>
-        <h1 className="mt-4 font-poppins text-3xl font-bold">Pesanan sedang dikirim</h1>
+        <h1 className="mt-4 font-poppins text-3xl font-bold">
+          {order ? `Pesanan ${order.status}` : 'Pesanan sedang diproses'}
+        </h1>
         <div className="mt-10 rounded-[28px] bg-white p-6 shadow-soft dark:bg-slate-900">
           <div className="grid gap-6 md:grid-cols-4">
             {steps.map((step, index) => (
@@ -518,8 +611,34 @@ function TrackingPage() {
   );
 }
 
-function CustomerDashboard({ user }) {
+function CustomerDashboard({ user, products }) {
   const recent = JSON.parse(localStorage.getItem('nn_recently_viewed') || '[]');
+  const [orders, setOrders] = useState(mockOrders);
+  const [notifications, setNotifications] = useState(mockNotifications);
+  const [profileName, setProfileName] = useState(user?.name || '');
+  const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || '');
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    Promise.all([getOrders(user.id, user.role), getNotifications(user.role)])
+      .then(([orderItems, notificationItems]) => {
+        setOrders(orderItems);
+        setNotifications(notificationItems);
+      })
+      .catch((error) => console.warn(error.message));
+  }, [user]);
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    try {
+      await updateProfile(user.id, { full_name: profileName, avatar_url: avatarUrl });
+      Swal.fire('Profil tersimpan', 'Data pelanggan berhasil diperbarui.', 'success');
+    } catch (error) {
+      Swal.fire('Profil gagal disimpan', error.message, 'error');
+    }
+  };
+
   return (
     <motion.div className="page" {...pageMotion}>
       <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
@@ -531,19 +650,28 @@ function CustomerDashboard({ user }) {
           <Link className="btn-primary" to="/shop"><FiShoppingBag /> Belanja Lagi</Link>
         </div>
         <div className="mt-8 grid gap-4 md:grid-cols-4">
-          <Metric title="Pesanan" value="8" icon={<FiPackage />} />
-          <Metric title="Wishlist" value="4" icon={<FiHeart />} />
+          <Metric title="Pesanan" value={orders.length} icon={<FiPackage />} />
+          <Metric title="Wishlist" value="Realtime" icon={<FiHeart />} />
           <Metric title="Voucher" value="2" icon={<FiCreditCard />} />
-          <Metric title="Notifikasi" value="6" icon={<FiBell />} />
+          <Metric title="Notifikasi" value={notifications.length} icon={<FiBell />} />
         </div>
         <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_.75fr]">
           <Panel title="Riwayat pesanan">
-            <OrderList compact />
+            <OrderList orders={orders} compact />
           </Panel>
           <Panel title="Recently viewed">
             <div className="grid gap-3">
               {(recent.length ? recent : products.slice(0, 3)).map((item) => <MiniProduct key={item.id} item={item} />)}
             </div>
+          </Panel>
+        </div>
+        <div className="mt-8">
+          <Panel title="Profil pelanggan">
+            <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto]" onSubmit={saveProfile}>
+              <Field label="Nama lengkap" value={profileName} onChange={(event) => setProfileName(event.target.value)} required />
+              <Field label="Avatar URL" value={avatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} placeholder="https://..." />
+              <button className="btn-primary self-end">Simpan</button>
+            </form>
           </Panel>
         </div>
       </div>
@@ -553,22 +681,50 @@ function CustomerDashboard({ user }) {
 
 function AuthPage({ type, setUser }) {
   const navigate = useNavigate();
+  const [submitting, setSubmitting] = useState(false);
   const isLogin = type === 'login';
   const isForgot = type === 'forgot';
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    if (isForgot) {
-      Swal.fire('Terkirim', 'Instruksi reset password akan dikirim jika email terdaftar.', 'success');
-      return;
-    }
 
-    const role = isLogin && e.currentTarget.email.value.includes('admin') ? 'admin' : 'customer';
-    const user = { name: role === 'admin' ? 'Admin Nyemil' : 'Pelanggan Nyemil', role };
-    localStorage.setItem('nn_user', JSON.stringify(user));
-    localStorage.setItem('nn_token', 'demo-token');
-    setUser(user);
-    navigate(role === 'admin' ? '/admin' : '/customer');
+    const form = e.currentTarget;
+    const email = form.email.value;
+    const password = form.password?.value;
+    const fullName = form.full_name?.value;
+
+    setSubmitting(true);
+    try {
+      if (isForgot) {
+        await resetPassword(email);
+        Swal.fire('Terkirim', 'Instruksi reset password akan dikirim jika email terdaftar.', 'success');
+        return;
+      }
+
+      const profile = isLogin
+        ? await signInWithEmail(email, password)
+        : await signUpWithEmail({ email, password, fullName });
+
+      if (profile.needsEmailConfirmation) {
+        Swal.fire('Cek email Anda', 'Akun berhasil dibuat. Konfirmasi email dulu sebelum login.', 'success');
+        navigate('/login');
+        return;
+      }
+
+      setUser(profile);
+      Swal.fire({
+        title: isLogin ? 'Login berhasil' : 'Akun siap digunakan',
+        text: `Selamat datang, ${profile.name}.`,
+        icon: 'success',
+        timer: 1300,
+        showConfirmButton: false
+      });
+      navigate(profile.role === 'admin' ? '/admin' : '/customer');
+    } catch (error) {
+      Swal.fire('Autentikasi gagal', error.message, 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
 return (
@@ -606,6 +762,7 @@ return (
       <div className="mt-6 grid gap-4">
         {!isLogin && !isForgot && (
           <Field
+            name="full_name"
             label="Nama lengkap"
             placeholder="Nama Anda"
             required
@@ -638,8 +795,10 @@ return (
         </label>
       )}
 
-      <button className="mt-6 w-full btn-primary">
-        {isForgot
+      <button className="mt-6 w-full btn-primary" disabled={submitting}>
+        {submitting
+          ? 'Memproses...'
+          : isForgot
           ? 'Kirim Instruksi'
           : isLogin
           ? 'Login'
@@ -666,15 +825,76 @@ return (
 );
 }
 
-function AdminGuard({ user, children }) {
+function LoadingRoute() {
+  return <div className="grid min-h-[60vh] place-items-center text-slate-500">Memuat sesi...</div>;
+}
+
+function CustomerGuard({ user, authLoading, children }) {
+  if (authLoading) return <LoadingRoute />;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function AdminGuard({ user, authLoading, children }) {
+  if (authLoading) return <LoadingRoute />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== 'admin') return <Navigate to="/customer" replace />;
   return children;
 }
 
-function AdminDashboard() {
+function AdminDashboard({ products, setProducts }) {
   const [tab, setTab] = useState('dashboard');
   const [collapsed, setCollapsed] = useState(false);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState('');
+  const [dashboard, setDashboard] = useState({
+    products,
+    orders: mockOrders,
+    notifications: mockNotifications,
+    profiles: [],
+    lowStock: products.filter((item) => item.stock <= 12),
+    stats: {
+      totalSales: mockOrders.reduce((sum, order) => sum + order.total, 0),
+      totalOrders: mockOrders.length,
+      totalProducts: products.length,
+      customerCount: 0
+    }
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => {
+      if (!isSupabaseConfigured) {
+        setDashboardLoading(false);
+        setDashboardError('Supabase belum dikonfigurasi. Dashboard memakai data demo lokal.');
+        return;
+      }
+
+      getDashboardData()
+        .then((data) => {
+          if (!mounted) return;
+          setDashboard(data);
+          setProducts(data.products);
+          setDashboardError('');
+        })
+        .catch((error) => {
+          if (!mounted) return;
+          debugError('dashboard.refresh', error);
+          setDashboardError(getFriendlyError(error, 'Dashboard gagal memuat data Supabase.'));
+        })
+        .finally(() => {
+          if (mounted) setDashboardLoading(false);
+        });
+    };
+
+    refresh();
+    const unsubscribe = subscribeDashboard(refresh);
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [setProducts]);
 
   return (
     <motion.div className="admin-shell" {...pageMotion}>
@@ -697,12 +917,14 @@ function AdminDashboard() {
       <section className="min-w-0 flex-1">
         <AdminTopbar />
         <div className="p-4 sm:p-6 lg:p-8">
-          {tab === 'dashboard' && <AdminOverview />}
-          {tab === 'orders' && <OrdersAdmin />}
-          {tab === 'products' && <ProductsAdmin />}
-          {tab === 'stock' && <StockAdmin />}
-          {tab === 'customers' && <CustomersAdmin />}
-          {tab === 'notifications' && <NotificationsAdmin />}
+          {dashboardError && <InlineAlert title="Dashboard perlu perhatian" text={dashboardError} />}
+          {dashboardLoading && <div className="mb-5 text-sm font-semibold text-slate-500">Memuat dashboard realtime...</div>}
+          {tab === 'dashboard' && <AdminOverview dashboard={dashboard} />}
+          {tab === 'orders' && <OrdersAdmin orders={dashboard.orders} />}
+          {tab === 'products' && <ProductsAdmin products={dashboard.products} setProducts={setProducts} onProductsChange={(items) => setDashboard((current) => ({ ...current, products: items, lowStock: items.filter((item) => item.stock <= 12), stats: { ...current.stats, totalProducts: items.length } }))} />}
+          {tab === 'stock' && <StockAdmin products={dashboard.products} />}
+          {tab === 'customers' && <CustomersAdmin profiles={dashboard.profiles} orders={dashboard.orders} />}
+          {tab === 'notifications' && <NotificationsAdmin notifications={dashboard.notifications} />}
           {tab === 'reports' && <ReportsAdmin />}
         </div>
       </section>
@@ -725,7 +947,9 @@ function AdminTopbar() {
   );
 }
 
-function AdminOverview() {
+function AdminOverview({ dashboard }) {
+  const { stats, orders, notifications } = dashboard;
+
   return (
     <div>
       <div className="dashboard-head">
@@ -736,10 +960,10 @@ function AdminOverview() {
         <button className="btn-primary"><FiDownload /> Export Laporan</button>
       </div>
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Metric title="Total Penjualan" value="Rp 128,4 jt" icon={<FiCreditCard />} trend="+18%" />
-        <Metric title="Total Pesanan" value="1.248" icon={<FiPackage />} trend="+12%" />
-        <Metric title="Produk Terjual" value="12.084" icon={<FiShoppingBag />} trend="+21%" />
-        <Metric title="Pelanggan" value="3.842" icon={<FiUsers />} trend="+9%" />
+        <Metric title="Total Penjualan" value={formatCurrency(stats.totalSales)} icon={<FiCreditCard />} trend="live" />
+        <Metric title="Total Pesanan" value={stats.totalOrders} icon={<FiPackage />} trend="live" />
+        <Metric title="Total Produk" value={stats.totalProducts} icon={<FiShoppingBag />} trend="live" />
+        <Metric title="Pelanggan" value={stats.customerCount} icon={<FiUsers />} trend="live" />
       </div>
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_.6fr]">
         <Panel title="Revenue harian">
@@ -775,14 +999,14 @@ function AdminOverview() {
         </Panel>
       </div>
       <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_.8fr]">
-        <Panel title="Recent order"><OrderList /></Panel>
-        <Panel title="Aktivitas terbaru"><NotificationList /></Panel>
+        <Panel title="Recent order"><OrderList orders={orders} /></Panel>
+        <Panel title="Aktivitas terbaru"><NotificationList notifications={notifications} /></Panel>
       </div>
     </div>
   );
 }
 
-function OrdersAdmin() {
+function OrdersAdmin({ orders }) {
   const [status, setStatus] = useState('semua');
   const filtered = status === 'semua' ? orders : orders.filter((order) => order.status === status);
   return (
@@ -804,29 +1028,117 @@ function OrdersAdmin() {
   );
 }
 
-function ProductsAdmin() {
+function ProductsAdmin({ products, setProducts, onProductsChange }) {
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [imagePreview, setImagePreview] = useState('');
+
+  useEffect(() => {
+    return () => {
+      if (imagePreview.startsWith('blob:')) URL.revokeObjectURL(imagePreview);
+    };
+  }, [imagePreview]);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = {
+      name: form.name.value,
+      description: form.description.value,
+      price: form.price.value,
+      stock: form.stock.value,
+      category: form.category.value,
+      image_url: form.image_url.value,
+      featured: form.featured.checked
+    };
+    const imageFile = form.image.files?.[0];
+
+    setSaving(true);
+    try {
+      const product = editing
+        ? await updateProduct(editing.id, payload, imageFile)
+        : await createProduct(payload, imageFile);
+
+      const nextProducts = editing ? products.map((item) => item.id === product.id ? product : item) : [product, ...products];
+      setProducts(nextProducts);
+      onProductsChange?.(nextProducts);
+      setEditing(null);
+      setImagePreview('');
+      form.reset();
+      Swal.fire('Tersimpan', 'Produk berhasil disinkronkan ke Supabase.', 'success');
+    } catch (error) {
+      Swal.fire('Gagal menyimpan', error.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (product) => {
+    const result = await Swal.fire({
+      title: 'Hapus produk?',
+      text: product.name,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Hapus',
+      cancelButtonText: 'Batal'
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      await deleteProduct(product.id);
+      const nextProducts = products.filter((item) => item.id !== product.id);
+      setProducts(nextProducts);
+      onProductsChange?.(nextProducts);
+      Swal.fire('Dihapus', 'Produk berhasil dihapus.', 'success');
+    } catch (error) {
+      Swal.fire('Gagal menghapus', error.message, 'error');
+    }
+  };
+
   return (
     <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
-      <Panel title="Tambah produk">
-        <div className="grid gap-4">
-          <Field label="Nama produk" placeholder="Contoh: Basreng Njabrik Level 5" />
-          <Field label="Harga" placeholder="22000" />
-          <Field label="Stok" placeholder="40" />
-          <Field label="Kategori" placeholder="Basreng" />
-          <label className="field upload-zone"><FiUpload /><span>Drag & drop multi-image</span><input type="file" multiple /></label>
-          <button className="btn-primary"><FiPlus /> Simpan Produk</button>
-        </div>
+      <Panel title={editing ? 'Edit produk' : 'Tambah produk'}>
+        <form key={editing?.id || 'new-product'} className="grid gap-4" onSubmit={submit}>
+          <Field name="name" label="Nama produk" placeholder="Contoh: Basreng Njabrik Level 5" defaultValue={editing?.name || ''} required />
+          <Field name="description" label="Deskripsi" placeholder="Deskripsi singkat produk" defaultValue={editing?.description || ''} required />
+          <Field name="price" label="Harga" type="number" min="0" placeholder="22000" defaultValue={editing?.price || ''} required />
+          <Field name="stock" label="Stok" type="number" min="0" placeholder="40" defaultValue={editing?.stock || ''} required />
+          <Field name="category" label="Kategori" placeholder="Basreng" defaultValue={editing?.category || ''} required />
+          <Field name="image_url" label="Image URL fallback" placeholder="https://..." defaultValue={editing?.image_url || editing?.image || ''} />
+          <label className="field upload-zone">
+            {imagePreview || editing?.image ? <img src={imagePreview || editing.image} alt="Preview produk" className="h-24 w-24 rounded-2xl object-cover" /> : <FiUpload />}
+            <span>Upload gambar produk</span>
+            <input
+              name="image"
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                setImagePreview(file ? URL.createObjectURL(file) : '');
+              }}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm font-bold text-slate-600 dark:text-slate-300">
+            <input name="featured" type="checkbox" defaultChecked={editing?.featured || false} />
+            Featured product
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary" disabled={saving}><FiPlus /> {saving ? 'Menyimpan...' : 'Simpan Produk'}</button>
+            {editing && <button type="button" className="btn-secondary" onClick={() => { setEditing(null); setImagePreview(''); }}>Batal</button>}
+          </div>
+        </form>
       </Panel>
       <Panel title="Daftar produk">
         <div className="grid gap-3">
-          {products.map((item) => <MiniProduct key={item.id} item={item} admin />)}
+          {products.map((item) => <MiniProduct key={item.id} item={item} admin onEdit={setEditing} onDelete={remove} />)}
         </div>
       </Panel>
     </div>
   );
 }
 
-function StockAdmin() {
+function StockAdmin({ products }) {
   return (
     <Panel title="Manajemen stok">
       <div className="grid gap-3">
@@ -849,12 +1161,15 @@ function StockAdmin() {
   );
 }
 
-function CustomersAdmin() {
-  const customers = [
-    ['Sari Dewi', 'sari@example.com', '8 transaksi', 'Rp 742.000', 'active'],
-    ['Bima Pratama', 'bima@example.com', '5 transaksi', 'Rp 530.000', 'active'],
-    ['Maya Fitri', 'maya@example.com', '11 transaksi', 'Rp 1.240.000', 'vip']
-  ];
+function CustomersAdmin({ profiles, orders }) {
+  const customers = profiles
+    .filter((profile) => profile.role === 'customer')
+    .map((profile) => {
+      const customerOrders = orders.filter((order) => order.customer === profile.full_name);
+      const total = customerOrders.reduce((sum, order) => sum + order.total, 0);
+      return [profile.full_name, profile.id.slice(0, 8), `${customerOrders.length} transaksi`, formatCurrency(total), 'active'];
+    });
+
   return (
     <Panel title="Customer management">
       <div className="responsive-table">
@@ -867,8 +1182,8 @@ function CustomersAdmin() {
   );
 }
 
-function NotificationsAdmin() {
-  return <Panel title="Notification center"><NotificationList /></Panel>;
+function NotificationsAdmin({ notifications }) {
+  return <Panel title="Notification center"><NotificationList notifications={notifications} /></Panel>;
 }
 
 function ReportsAdmin() {
@@ -1033,8 +1348,8 @@ function Panel({ title, children }) {
   return <section className="panel"><h2>{title}</h2><div className="mt-5">{children}</div></section>;
 }
 
-function OrderList({ compact }) {
-  return <div className="grid gap-3">{orders.slice(0, compact ? 3 : 4).map((order) => <div key={order.id} className="order-item"><div><strong>{order.id}</strong><p>{order.customer} - {order.product}</p></div><span className={`status status-${order.status}`}>{order.status}</span><strong>{formatCurrency(order.total)}</strong></div>)}</div>;
+function OrderList({ orders = mockOrders, compact }) {
+  return <div className="grid gap-3">{orders.slice(0, compact ? 3 : 4).map((order) => <div key={order.id} className="order-item"><div><strong>{String(order.id).slice(0, 8)}</strong><p>{order.customer} - {order.product}</p></div><span className={`status status-${order.status}`}>{order.status}</span><strong>{formatCurrency(order.total)}</strong></div>)}</div>;
 }
 
 function DataTable({ rows }) {
@@ -1045,7 +1360,7 @@ function DataTable({ rows }) {
         <tbody>
           {rows.map((order) => (
             <tr key={order.id}>
-              <td>{order.id}</td><td>{order.customer}</td><td>{order.product}</td><td>{formatCurrency(order.total)}</td><td><span className={`status status-${order.status}`}>{order.status}</span></td><td>{order.time}</td><td><button className="btn-mini">Update</button></td>
+              <td>{String(order.id).slice(0, 8)}</td><td>{order.customer}</td><td>{order.product}</td><td>{formatCurrency(order.total)}</td><td><span className={`status status-${order.status}`}>{order.status}</span></td><td>{order.time}</td><td><button className="btn-mini">Update</button></td>
             </tr>
           ))}
         </tbody>
@@ -1055,19 +1370,24 @@ function DataTable({ rows }) {
   );
 }
 
-function NotificationList() {
-  return <div className="grid gap-3">{notifications.map((item) => <div key={item.title} className="notification-item"><span><FiBell /></span><div><strong>{item.title}</strong><p>{item.message}</p></div></div>)}</div>;
+function NotificationList({ notifications = mockNotifications }) {
+  return <div className="grid gap-3">{notifications.map((item) => <div key={item.id || item.title} className="notification-item"><span><FiBell /></span><div><strong>{item.title}</strong><p>{item.message}</p></div></div>)}</div>;
 }
 
-function MiniProduct({ item, admin }) {
+function MiniProduct({ item, admin, onEdit, onDelete }) {
   return (
     <div className="mini-product">
-      <img src={item.image} alt={item.name} />
+      <img src={item.image || item.image_url} alt={item.name} />
       <div className="min-w-0 flex-1">
         <strong>{item.name}</strong>
         <p>{item.category} - {formatCurrency(item.price)}</p>
       </div>
-      {admin ? <button className="btn-mini">Edit</button> : <Link className="btn-mini" to={`/product/${item.slug}`}>Lihat</Link>}
+      {admin ? (
+        <div className="flex gap-2">
+          <button className="btn-mini" onClick={() => onEdit?.(item)}>Edit</button>
+          <button className="btn-mini" onClick={() => onDelete?.(item)}>Hapus</button>
+        </div>
+      ) : <Link className="btn-mini" to={`/product/${item.slug}`}>Lihat</Link>}
     </div>
   );
 }
@@ -1078,6 +1398,15 @@ function Field({ label, className = '', ...props }) {
 
 function EmptyState({ title, text }) {
   return <div className="empty-state"><FiShoppingBag /><h3>{title}</h3><p>{text}</p></div>;
+}
+
+function InlineAlert({ title, text }) {
+  return (
+    <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+      <strong>{title}</strong>
+      <p className="mt-1 text-sm">{text}</p>
+    </div>
+  );
 }
 
 function SkeletonGrid() {

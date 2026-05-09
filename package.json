@@ -4,15 +4,12 @@
   "version": "1.0.0",
   "description": "Full-stack UMKM snack e-commerce and monitoring dashboard for Nyemil Njabrik.",
   "scripts": {
-    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
-    "install:all": "npm install --prefix backend && npm install --prefix frontend",
-    "build": "npm run build --prefix frontend",
-    "start:backend": "npm start --prefix backend"
+    "dev": "npm --prefix frontend run dev",
+    "install:all": "npm --prefix frontend install",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview"
   },
   "engines": {
     "node": ">=20"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1"
   }
 }

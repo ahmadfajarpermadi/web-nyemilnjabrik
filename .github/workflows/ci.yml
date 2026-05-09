@@ -21,16 +21,12 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             frontend/package-lock.json
-            backend/package-lock.json
 
       - name: Install root tools
         run: npm ci
 
       - name: Install frontend
-        run: npm ci --prefix frontend
-
-      - name: Install backend
-        run: npm ci --prefix backend
+        run: npm --prefix frontend ci
 
       - name: Build frontend
-        run: npm run build --prefix frontend
+        run: npm --prefix frontend run build
