@@ -3,8 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   getCurrentSession,
   getCurrentUserProfile,
-  onAuthStateChange,
-  signOut
+  onAuthStateChange
 } from '../lib/auth.js';
 
 import { debugError } from '../lib/supabase.js';
@@ -15,7 +14,7 @@ export function useAuth() {
 
   const [loading, setLoading] = useState(true);
 
-  // HYDRATION STATE
+  // menandakan auth hydration selesai
   const [initialized, setInitialized] =
     useState(false);
 
@@ -23,31 +22,14 @@ export function useAuth() {
 
     let mounted = true;
 
-    const safeLogout = async () => {
-      try {
-        await signOut();
-
-      } catch (error) {
-        console.error(error);
-
-      } finally {
-
-        localStorage.removeItem(
-          'nyemil-njabrik-auth'
-        );
-
-        if (mounted) {
-          setUser(null);
-        }
-      }
-    };
-
+    // AUTH INITIALIZATION
     const initializeAuth = async () => {
 
       try {
 
         setLoading(true);
 
+        // ambil session Supabase
         const session =
           await getCurrentSession();
 
@@ -55,25 +37,32 @@ export function useAuth() {
 
         // belum login
         if (!session?.user) {
+
           setUser(null);
 
           return;
         }
 
-        // ambil profile
+        // beri waktu auth restore
+        await new Promise((resolve) =>
+          setTimeout(resolve, 200)
+        );
+
+        // ambil profile user
         const profile =
           await getCurrentUserProfile();
 
         if (!mounted) return;
 
-        // profile gagal
+        // profile tidak ditemukan
         if (!profile) {
 
-          await safeLogout();
+          setUser(null);
 
           return;
         }
 
+        // set user
         setUser(profile);
 
       } catch (error) {
@@ -85,12 +74,16 @@ export function useAuth() {
           error
         );
 
-        await safeLogout();
+        // jangan crash auth flow
+        if (mounted) {
+          setUser(null);
+        }
 
       } finally {
 
-        // auth hydration selesai
+        // hydration selesai
         if (mounted) {
+
           setLoading(false);
 
           setInitialized(true);
@@ -100,6 +93,7 @@ export function useAuth() {
 
     initializeAuth();
 
+    // AUTH LISTENER
     const subscription =
       onAuthStateChange(
         async (profile) => {
@@ -108,10 +102,17 @@ export function useAuth() {
 
           try {
 
+            // hydration awal kadang null sementara
             if (!profile) {
+
+              // jika belum hydration selesai,
+              // jangan langsung logout user
+              if (!initialized) return;
+
               setUser(null);
 
             } else {
+
               setUser(profile);
             }
 
@@ -124,11 +125,10 @@ export function useAuth() {
               error
             );
 
-            await safeLogout();
-
           } finally {
 
             if (mounted) {
+
               setLoading(false);
 
               setInitialized(true);
@@ -137,7 +137,7 @@ export function useAuth() {
         }
       );
 
-    // failsafe
+    // FAILSAFE anti infinite loading
     const timeout = setTimeout(() => {
 
       if (mounted) {
@@ -158,7 +158,7 @@ export function useAuth() {
       subscription?.unsubscribe?.();
     };
 
-  }, []);
+  }, [initialized]);
 
   return {
     user,
