@@ -26,17 +26,20 @@ if (!isSupabaseConfigured) {
   console.warn('Supabase env is missing. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
 }
 
-export const supabase = createClient(supabaseUrl || 'https://example.supabase.co', supabaseAnonKey || 'missing-key', {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storageKey: 'nyemil-njabrik-auth',
-    flowType: 'pkce'
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 10
+export const supabase = createClient(
+  supabaseUrl || 'https://example.supabase.co',
+  supabaseAnonKey || 'missing-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    },
+
+    realtime: {
+      params: {
+        eventsPerSecond: 10
+      }
     }
   }
-});
+);
