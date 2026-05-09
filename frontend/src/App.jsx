@@ -76,7 +76,12 @@ function App() {
   const [products, setProducts] = useState(isSupabaseConfigured ? [] : mockProducts);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState('');
-  const { user, setUser, loading: authLoading } = useAuth();
+  const {
+  user,
+  setUser,
+  loading: authLoading,
+  initialized
+} = useAuth();
   const location = useLocation();
   useSeo(location.pathname);
 
@@ -145,13 +150,29 @@ function App() {
           <Route path="/shop" element={<ShopPage products={products} loading={productsLoading} error={productsError} addToCart={addToCart} />} />
           <Route path="/product/:slug" element={<ProductDetail products={products} loading={productsLoading} error={productsError} user={user} addToCart={addToCart} />} />
           <Route path="/cart" element={<CartPage cart={cart} updateQty={updateQty} removeCart={removeCart} />} />
-          <Route path="/checkout" element={<CustomerGuard user={user} authLoading={authLoading}><CheckoutPage user={user} cart={cart} setCart={setCart} /></CustomerGuard>} />
-          <Route path="/tracking/:id" element={<CustomerGuard user={user} authLoading={authLoading}><TrackingPage user={user} /></CustomerGuard>} />
-          <Route path="/customer" element={<CustomerGuard user={user} authLoading={authLoading}><CustomerDashboard user={user} products={products} /></CustomerGuard>} />
+          <Route path="/checkout" element={<CustomerGuard
+  user={user}
+  authLoading={authLoading}
+  initialized={initialized}
+><CheckoutPage user={user} cart={cart} setCart={setCart} /></CustomerGuard>} />
+          <Route path="/tracking/:id" element={<CustomerGuard
+  user={user}
+  authLoading={authLoading}
+  initialized={initialized}
+><TrackingPage user={user} /></CustomerGuard>} />
+          <Route path="/customer" element={<CustomerGuard
+  user={user}
+  authLoading={authLoading}
+  initialized={initialized}
+><CustomerDashboard user={user} products={products} /></CustomerGuard>} />
           <Route path="/login" element={<AuthPage type="login" setUser={setUser} />} />
           <Route path="/register" element={<AuthPage type="register" setUser={setUser} />} />
           <Route path="/forgot-password" element={<AuthPage type="forgot" setUser={setUser} />} />
-          <Route path="/admin/*" element={<AdminGuard user={user} authLoading={authLoading}><AdminDashboard products={products} setProducts={setProducts} /></AdminGuard>} />
+          <Route path="/admin/*" element={<AdminGuard
+  user={user}
+  authLoading={authLoading}
+  initialized={initialized}
+><AdminDashboard products={products} setProducts={setProducts} /></AdminGuard>} />
         </Routes>
       </AnimatePresence>
       <FloatingActions />
@@ -829,16 +850,45 @@ function LoadingRoute() {
   return <div className="grid min-h-[60vh] place-items-center text-slate-500">Memuat sesi...</div>;
 }
 
-function CustomerGuard({ user, authLoading, children }) {
-  if (authLoading) return <LoadingRoute />;
-  if (!user) return <Navigate to="/login" replace />;
+function CustomerGuard({
+  user,
+  authLoading,
+  initialized,
+  children
+}) {
+
+  // tunggu hydration auth selesai
+  if (!initialized || authLoading) {
+    return <LoadingRoute />;
+  }
+
+  // baru redirect kalau benar-benar belum login
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
   return children;
 }
 
-function AdminGuard({ user, authLoading, children }) {
-  if (authLoading) return <LoadingRoute />;
-  if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== 'admin') return <Navigate to="/customer" replace />;
+function AdminGuard({
+  user,
+  authLoading,
+  initialized,
+  children
+}) {
+
+  if (!initialized || authLoading) {
+    return <LoadingRoute />;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (user.role !== 'admin') {
+    return <Navigate to="/customer" replace />;
+  }
+
   return children;
 }
 
